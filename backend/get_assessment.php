@@ -24,6 +24,13 @@ if ($id <= 0) {
     exit;
 }
 
+// Определяем тип формы из GET-параметра
+$form = isset($_GET['form']) ? trim($_GET['form']) : 'full';
+$isShort = ($form === 'short');
+
+$assessmentsTable = $isShort ? 'm_assessments' : 'assessments';
+$patientsTable = $isShort ? 'm_patients' : 'patients';
+
 try {
     $pdo = get_pdo_connection();
 
@@ -31,8 +38,8 @@ try {
         SELECT
             a.*,
             COALESCE(p.full_name, '') AS full_name
-        FROM assessments a
-        LEFT JOIN patients p ON a.patient_id = p.id
+        FROM {$assessmentsTable} a
+        LEFT JOIN {$patientsTable} p ON a.patient_id = p.id
         WHERE a.id = :id
         LIMIT 1
     ");
@@ -53,6 +60,12 @@ try {
         $decoded = json_decode($row['pain_descriptors'], true);
         if (json_last_error() === JSON_ERROR_NONE) {
             $row['pain_descriptors'] = $decoded;
+        }
+    }
+    if (isset($row['body_map']) && is_string($row['body_map'])) {
+        $decoded = json_decode($row['body_map'], true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            $row['body_map'] = $decoded;
         }
     }
 

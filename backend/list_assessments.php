@@ -17,6 +17,13 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 try {
     $pdo = get_pdo_connection();
 
+    // Определяем тип формы из GET-параметра
+    $form = isset($_GET['form']) ? trim($_GET['form']) : 'full';
+    $isShort = ($form === 'short');
+
+    $assessmentsTable = $isShort ? 'm_assessments' : 'assessments';
+    $patientsTable = $isShort ? 'm_patients' : 'patients';
+
     $stmt = $pdo->query("
         SELECT
             a.id AS assessment_id,
@@ -25,10 +32,13 @@ try {
             a.total_score,
             a.sensory_score,
             a.affective_score,
+            a.evaluative_score,
+            a.misc_score,
             a.vas_score,
-            a.ppi_score
-        FROM assessments a
-        LEFT JOIN patients p ON a.patient_id = p.id
+            a.ppi_score,
+            a.questionnaire_type
+        FROM {$assessmentsTable} a
+        LEFT JOIN {$patientsTable} p ON a.patient_id = p.id
         ORDER BY a.created_at DESC, a.id DESC
     ");
 

@@ -37,9 +37,13 @@ try {
             total_score INT,
             sensory_score INT,
             affective_score INT,
+            evaluative_score INT NULL,
+            misc_score INT NULL,
             vas_score INT,
             ppi_score INT,
             pain_descriptors JSON,
+            body_map JSON NULL,
+            questionnaire_type VARCHAR(32) NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT fk_assessments_patient
                 FOREIGN KEY (patient_id)
@@ -47,6 +51,23 @@ try {
                 ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ");
+
+    // Миграции: добавить недостающие колонки в существующей таблице
+    $addColumnIfMissing = function(string $table, string $column, string $ddl) use ($pdo): void {
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c
+        ");
+        $stmt->execute([':t' => $table, ':c' => $column]);
+        if ((int)$stmt->fetchColumn() === 0) {
+            $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN {$ddl}");
+        }
+    };
+
+    $addColumnIfMissing('assessments', 'body_map', 'body_map JSON NULL');
+    $addColumnIfMissing('assessments', 'evaluative_score', 'evaluative_score INT NULL');
+    $addColumnIfMissing('assessments', 'misc_score', 'misc_score INT NULL');
+    $addColumnIfMissing('assessments', 'questionnaire_type', "questionnaire_type VARCHAR(32) NULL");
 
     // Таблица логов активности
     $pdo->exec("

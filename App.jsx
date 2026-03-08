@@ -64,6 +64,7 @@ function DescriptorRow({ item, value, onChange }) {
 function Admin() {
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
+    const [adminMode, setAdminMode] = useState("full"); // 'full' | 'short'
 
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthed, setIsAuthed] = useState(false);
@@ -80,16 +81,132 @@ function Admin() {
     const [detailLoading, setDetailLoading] = useState(false);
     const [deleteLoading, setDeleteLoading] = useState(false);
 
-    const exportSelectedToPDF = () => {
+    const exportSelectedToPDF = async () => {
+        if (!selected || selected.error) return;
+
+        if (adminMode === "short") {
+            return exportSelectedToPDFShort();
+        }
+
+        const fullName = selected.full_name || "Без имени";
+        const createdAt = selected.created_at || "";
+        const priTotal = selected.total_score ?? selected.pri ?? 0;
+        const priSensory = selected.sensory_score ?? selected.pri_sensory ?? 0;
+        const priAffective = selected.affective_score ?? selected.pri_affective ?? 0;
+        const priEvaluative = selected.evaluative_score ?? selected.pri_evaluative ?? 0;
+        const priMisc = selected.misc_score ?? selected.pri_misc ?? 0;
+        const ppiVal = selected.ppi_score ?? selected.ppi ?? 0;
+        const vasVal = selected.vas_score ?? null;
+        const typeLabel = (t) => ({ sensory: "Сенсорная", affective: "Аффективная", evaluative: "Оценочная", miscellaneous: "Прочие" })[t] || t;
+        const tableBody = [
+            ["№", "Тип", "Характер боли", "Ранг"],
+            ...MCGILL_CATEGORIES.map((c) => {
+                const rank = (selected.pain_descriptors && selected.pain_descriptors[c.id]) || 0;
+                const word = rank > 0 ? c.words[rank - 1] : "—";
+                return [c.id.toString(), typeLabel(c.type), word, rank.toString()];
+            }),
+        ];
+
+        const content = [
+            { text: "McGill Pain Questionnaire (MPQ)", style: "header" },
+            {
+                text: `Пациент: ${fullName}`,
+                style: "subheader",
+                margin: [0, 2, 0, 0],
+            },
+            {
+                text: `Дата заполнения: ${createdAt}`,
+                style: "subheader",
+                margin: [0, 0, 0, 2],
+            },
+            { text: "Итоговые показатели (MPQ)", style: "sectionTitle" },
+            {
+                ul: [
+                    `PRI (индекс боли): ${priTotal}`,
+                    `Сенсорная (1–10): ${priSensory}`,
+                    `Аффективная (11–15): ${priAffective}`,
+                    `Оценочная (16): ${priEvaluative || "—"}`,
+                    `Прочие (17–20): ${priMisc || "—"}`,
+                    `PPI (интенсивность): ${ppiVal} / 5`,
+                    (vasVal != null ? `VAS: ${vasVal} / 10` : null),
+                ].filter(Boolean),
+                margin: [0, 0, 0, 4],
+            },
+        ];
+
+        // Рисунок областей боли (если есть)
+        let frontImg = null;
+        let backImg = null;
+        if (selected.body_map) {
+            if (Array.isArray(selected.body_map.front) && selected.body_map.front.length > 0) {
+                frontImg = await buildBodyMapImage("front", selected.body_map.front);
+            }
+            if (Array.isArray(selected.body_map.back) && selected.body_map.back.length > 0) {
+                backImg = await buildBodyMapImage("back", selected.body_map.back);
+            }
+        }
+        if (frontImg || backImg) {
+            content.push(
+                { text: "Области боли", style: "sectionTitle", margin: [0, 4, 0, 4] },
+                {
+                    columns: [
+                        frontImg ? { image: frontImg, width: 90, margin: [0, 4, 8, 8] } : null,
+                        backImg ? { image: backImg, width: 90, margin: [8, 4, 0, 8] } : null,
+                    ].filter(Boolean),
+                }
+            );
+        }
+
+        content.push(
+            { text: "Детальные результаты", style: "sectionTitle", margin: [4, 6, 0, 4] },
+            {
+                table: {
+                    headerRows: 1,
+                    widths: ["auto", "auto", "*", "auto"],
+                    body: tableBody,
+                },
+                layout: "lightHorizontalLines",
+                fontSize: 9,
+            }
+        );
+
+        const docDefinition = {
+            content,
+            defaultStyle: {
+                font: "Roboto",
+                fontSize: 10,
+            },
+            styles: {
+                header: {
+                    fontSize: 14,
+                    bold: true,
+                    margin: [0, 0, 0, 4],
+                },
+                subheader: {
+                    fontSize: 10,
+                    color: "#555555",
+                },
+                sectionTitle: {
+                    fontSize: 12,
+                    bold: true,
+                    margin: [0, 2, 0, 2],
+                },
+            },
+        };
+
+        const safeName = fullName.replace(/\s+/g, "_");
+        pdfMake.createPdf(docDefinition).download(`MPQ_${safeName || "Patient"}_${selected.id}.pdf`);
+    };
+
+    const exportSelectedToPDFShort = () => {
         if (!selected || selected.error) return;
 
         const fullName = selected.full_name || "Без имени";
         const createdAt = selected.created_at || "";
         const tableBody = [
             ["№", "Параметр", "Категория", "Балл", "Уровень"],
-            ...PAIN_DESCRIPTORS.map((d) => {
-                const val =
-                    (selected.pain_descriptors && selected.pain_descriptors[d.id]) || 0;
+            ...PAIN_DESCRIPTORS_SHORT.map((d) => {
+                const val = (selected.pain_descriptors && selected.pain_descriptors[d.id]) || 0;
                 const cfg = LEVEL_CONFIG[val];
                 return [
                     d.id.toString(),
@@ -168,6 +285,7 @@ function Admin() {
 
         setDeleteLoading(true);
         try {
+            const formParam = adminMode === "short" ? "short" : "full";
             const res = await fetch("/backend/delete_assessment.php", {
                 method: "POST",
                 headers: {
@@ -175,7 +293,7 @@ function Admin() {
                     Accept: "application/json",
                 },
                 credentials: "include",
-                body: JSON.stringify({ id: selected.id }),
+                body: JSON.stringify({ id: selected.id, form: formParam }),
             });
             const data = await res.json();
             if (!res.ok || !data.success) {
@@ -213,7 +331,8 @@ function Admin() {
         setListLoading(true);
         setListError(null);
         try {
-            const res = await fetch("/backend/list_assessments.php", {
+            const formParam = adminMode === "short" ? "short" : "full";
+            const res = await fetch(`/backend/list_assessments.php?form=${formParam}`, {
                 headers: { Accept: "application/json" },
             });
             const data = await res.json();
@@ -232,7 +351,8 @@ function Admin() {
         setDetailLoading(true);
         setSelected(null);
         try {
-            const res = await fetch(`/backend/get_assessment.php?id=${id}`, {
+            const formParam = adminMode === "short" ? "short" : "full";
+            const res = await fetch(`/backend/get_assessment.php?id=${id}&form=${formParam}`, {
                 headers: { Accept: "application/json" },
             });
             const data = await res.json();
@@ -311,7 +431,7 @@ function Admin() {
             loadAssessments();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isAuthed]);
+    }, [isAuthed, adminMode]);
 
     if (!isAuthed) {
         return (
@@ -319,6 +439,9 @@ function Admin() {
                 <div className="header">
                     <div className="header-eyebrow">NeurologyToolKit · Админка</div>
                     <h1>Авторизация администратора</h1>
+                    <div style={{ marginTop: 8, fontSize: 13, color: "var(--muted)" }}>
+                        Выберите нужную форму после входа: полную MPQ или короткую SF‑MPQ.
+                    </div>
                 </div>
                 <div className="content">
                     <div className="section" style={{ maxWidth: 420, margin: "0 auto" }}>
@@ -394,41 +517,62 @@ function Admin() {
                 <h1>
                     <a href={'/'}>Анкета боли</a>
                 </h1>
+                <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                        type="button"
+                        className="export-btn"
+                        onClick={() => setAdminMode("full")}
+                        style={{
+                            padding: "6px 10px",
+                            fontSize: 13,
+                            background: adminMode === "full" ? "#1d4ed8" : "var(--surface1)",
+                            borderColor: adminMode === "full" ? "#1d4ed8" : "var(--border)",
+                            color: adminMode === "full" ? "#ffffff" : "var(--text)",
+                        }}
+                    >
+                        Полная MPQ (админка)
+                    </button>
+                    <button
+                        type="button"
+                        className="export-btn"
+                        onClick={() => setAdminMode("short")}
+                        style={{
+                            padding: "6px 10px",
+                            fontSize: 13,
+                            background: adminMode === "short" ? "#1d4ed8" : "var(--surface1)",
+                            borderColor: adminMode === "short" ? "#1d4ed8" : "var(--border)",
+                            color: adminMode === "short" ? "#ffffff" : "var(--text)",
+                        }}
+                    >
+                        Короткая SF‑MPQ (админка)
+                    </button>
+                </div>
             </div>
             <div className="content" style={{ width: '80vw', maxWidth: 'unset' }}>
-            {/*    <div className="section">*/}
-                    {/*<button*/}
-                    {/*    className="export-btn"*/}
-                    {/*    onClick={initDb}*/}
-                    {/*    disabled={loading}*/}
-                    {/*    style={{ marginTop: 16 }}*/}
-                    {/*>*/}
-                    {/*    {loading ? "Выполняется..." : "Создать / обновить структуру БД"}*/}
-                    {/*</button>*/}
-                    {result && (
+                {result && (
+                    <div
+                        className="alert"
+                        style={{
+                            marginTop: 16,
+                            background: result.ok
+                                ? "rgba(34,211,165,0.06)"
+                                : "rgba(239,68,68,0.08)",
+                            border: result.ok
+                                ? "1px solid rgba(34,211,165,0.25)"
+                                : "1px solid rgba(239,68,68,0.3)",
+                        }}
+                    >
                         <div
-                            className="alert"
-                            style={{
-                                marginTop: 16,
-                                background: result.ok
-                                    ? "rgba(34,211,165,0.06)"
-                                    : "rgba(239,68,68,0.08)",
-                                border: result.ok
-                                    ? "1px solid rgba(34,211,165,0.25)"
-                                    : "1px solid rgba(239,68,68,0.3)",
-                            }}
+                            className="alert-title"
+                            style={{ color: result.ok ? "#22d3a5" : "#ef4444" }}
                         >
-                            <div
-                                className="alert-title"
-                                style={{ color: result.ok ? "#22d3a5" : "#ef4444" }}
-                            >
-                                {result.ok ? "Готово" : "Ошибка"}
-                            </div>
-                            <div className="alert-body">
-                                {result.data?.message || result.data?.error || "хз"}
-                            </div>
+                            {result.ok ? "Готово" : "Ошибка"}
                         </div>
-                    )}
+                        <div className="alert-body">
+                            {result.data?.message || result.data?.error || "хз"}
+                        </div>
+                    </div>
+                )}
                 {/*</div>*/}
 
                 <div className="section">
@@ -466,12 +610,12 @@ function Admin() {
                                     const dt = a.created_at ? new Date(a.created_at.replace(" ", "T")) : null;
                                     const labelDate = dt
                                         ? dt.toLocaleString("ru-RU", {
-                                              day: "2-digit",
-                                              month: "2-digit",
-                                              year: "numeric",
-                                              hour: "2-digit",
-                                              minute: "2-digit",
-                                          })
+                                            day: "2-digit",
+                                            month: "2-digit",
+                                            year: "numeric",
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                        })
                                         : "Без даты";
                                     const name = a.full_name || "Без имени";
                                     const isActive = selected && selected.id === a.assessment_id;
@@ -496,7 +640,7 @@ function Admin() {
                                             }}
                                         >
                                             <div>
-                                                <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 8 }}>{name}</div>
+                                                <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 8, color: '#ffffff' }}>{name}</div>
                                                 <div style={{ fontSize: 12, color: "var(--muted)" }}>{labelDate}</div>
                                             </div>
                                             <div
@@ -509,7 +653,7 @@ function Admin() {
                                                     color: "#3b82f6",
                                                 }}
                                             >
-                                                {a.total_score} / 45
+                                                {adminMode === "short" ? `${a.total_score} / 45` : `PRI ${a.total_score ?? a.pri ?? "—"}`}
                                             </div>
                                         </button>
                                     );
@@ -565,7 +709,7 @@ function Admin() {
                                                 style={{
                                                     background: "#dc2626" ,
                                                     marginLeft: 'auto'
-                                            }}
+                                                }}
                                             >
                                                 <span className="export-icon">🗑</span>
                                             </button>
@@ -578,56 +722,138 @@ function Admin() {
                                         </div>
 
                                         <div className="summary-grid" style={{ marginBottom: 16 }}>
-                                            {[
-                                                ["Итого", selected.total_score, 45],
-                                                ["Физич.", selected.sensory_score, 33],
-                                                ["Эмоц.", selected.affective_score, 12],
-                                                ["VAS", selected.vas_score, 10],
-                                                ["PPI", selected.ppi_score, 5],
-                                            ].map(([l, v, m]) => (
-                                                <div key={l} className="stat-card">
-                                                    <div className="stat-label">{l}</div>
-                                                    <div className="stat-val">
-                                                        {v}
-                                                        <span>/{m}</span>
+                                            {adminMode === "short" ? (
+                                                [
+                                                    ["Итого", selected.total_score, 45],
+                                                    ["Физич.", selected.sensory_score, 33],
+                                                    ["Эмоц.", selected.affective_score, 12],
+                                                    ["VAS", selected.vas_score, 10],
+                                                    ["PPI", selected.ppi_score, 5],
+                                                ].map(([l, v, m]) => (
+                                                    <div key={l} className="stat-card">
+                                                        <div className="stat-label">{l}</div>
+                                                        <div className="stat-val">
+                                                            {v}
+                                                            <span>/{m}</span>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ))}
+                                                ))
+                                            ) : (
+                                                [
+                                                    ["PRI", selected.total_score ?? selected.pri, mcgillMaxPRI()],
+                                                    ["Сенсор.", selected.sensory_score ?? selected.pri_sensory, MCGILL_CATEGORIES.filter(c => c.type === "sensory").reduce((s, c) => s + c.words.length, 0)],
+                                                    ["Аффект.", selected.affective_score ?? selected.pri_affective, MCGILL_CATEGORIES.filter(c => c.type === "affective").reduce((s, c) => s + c.words.length, 0)],
+                                                    ["Оценка", selected.pri_evaluative ?? 0, MCGILL_CATEGORIES.find(c => c.type === "evaluative")?.words.length ?? 0],
+                                                    ["Прочие", selected.pri_misc ?? 0, MCGILL_CATEGORIES.filter(c => c.type === "miscellaneous").reduce((s, c) => s + c.words.length, 0)],
+                                                    ["PPI", selected.ppi_score ?? selected.ppi, 5],
+                                                    ...(selected.vas_score != null ? [["VAS", selected.vas_score, 10]] : []),
+                                                ].map(([l, v, m]) => (
+                                                    <div key={l} className="stat-card">
+                                                        <div className="stat-label">{l}</div>
+                                                        <div className="stat-val">
+                                                            {v ?? "—"}
+                                                            {m != null && <span>/{m}</span>}
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
                                         </div>
 
-                                        {Array.isArray(PAIN_DESCRIPTORS) && selected.pain_descriptors && (
-                                            <div style={{ marginTop: 8 }}>
-                                                <div
-                                                    style={{
-                                                        fontSize: 13,
-                                                        fontWeight: 500,
-                                                        marginBottom: 6,
-                                                    }}
-                                                >
-                                                    Карта боли
+                                        {adminMode === "short" ? (
+                                            Array.isArray(PAIN_DESCRIPTORS_SHORT) && selected.pain_descriptors && (
+                                                <div style={{ marginTop: 8 }}>
+                                                    <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Карта боли</div>
+                                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                                        {PAIN_DESCRIPTORS_SHORT.map((d) => {
+                                                            const val = (selected.pain_descriptors && selected.pain_descriptors[d.id]) || 0;
+                                                            const cfg = LEVEL_CONFIG[val];
+                                                            return (
+                                                                <div
+                                                                    key={d.id}
+                                                                    style={{
+                                                                        padding: "6px 8px",
+                                                                        borderRadius: 999,
+                                                                        border: `1px solid ${cfg.border}`,
+                                                                        background: cfg.bg,
+                                                                        fontSize: 11,
+                                                                        color: cfg.color,
+                                                                    }}
+                                                                >
+                                                                    {d.id}. {d.label}: {cfg.label}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
                                                 </div>
-                                                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                                                    {PAIN_DESCRIPTORS.map((d) => {
-                                                        const val =
-                                                            (selected.pain_descriptors &&
-                                                                selected.pain_descriptors[d.id]) || 0;
-                                                        const cfg = LEVEL_CONFIG[val];
-                                                        return (
-                                                            <div
-                                                                key={d.id}
-                                                                style={{
-                                                                    padding: "6px 8px",
-                                                                    borderRadius: 999,
-                                                                    border: `1px solid ${cfg.border}`,
-                                                                    background: cfg.bg,
-                                                                    fontSize: 11,
-                                                                    color: cfg.color,
-                                                                }}
-                                                            >
-                                                                {d.id}. {d.label}: {cfg.label}
-                                                            </div>
-                                                        );
-                                                    })}
+                                            )
+                                        ) : (
+                                            Array.isArray(MCGILL_CATEGORIES) && selected.pain_descriptors && (
+                                                <div style={{ marginTop: 8 }}>
+                                                    <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Выбранные дескрипторы</div>
+                                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                                        {MCGILL_CATEGORIES.map((c) => {
+                                                            const rank = selected.pain_descriptors[c.id] || 0;
+                                                            const word = rank > 0 ? c.words[rank - 1] : null;
+                                                            if (!word) return null;
+                                                            return (
+                                                                <div
+                                                                    key={c.id}
+                                                                    style={{
+                                                                        padding: "6px 8px",
+                                                                        borderRadius: 999,
+                                                                        border: "1px solid var(--border)",
+                                                                        background: "var(--surface2)",
+                                                                        fontSize: 11,
+                                                                    }}
+                                                                >
+                                                                    {c.id}. {word} (ранг {rank})
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )
+                                        )}
+                                        {selected.body_map && (selected.body_map.front?.length > 0 || selected.body_map.back?.length > 0) && (
+                                            <div style={{ marginTop: 16 }}>
+                                                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Карта тела</div>
+                                                <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                                                    {selected.body_map.front?.length > 0 && (
+                                                        <div>
+                                                            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Спереди</div>
+                                                            <svg viewBox={`0 0 ${BODY_VIEWBOX.w} ${BODY_VIEWBOX.h}`} width={120} height={240} style={{ border: "1px solid var(--border)", borderRadius: 8 }}>
+                                                                <image
+                                                                    href={BODY_IMAGES.front}
+                                                                    x="0"
+                                                                    y="0"
+                                                                    width={BODY_VIEWBOX.w}
+                                                                    height={BODY_VIEWBOX.h}
+                                                                    preserveAspectRatio="xMidYMid meet"
+                                                                />
+                                                                <g fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" opacity={0.85}>
+                                                                    {selected.body_map.front.map((d, i) => <path key={i} d={d} />)}
+                                                                </g>
+                                                            </svg>
+                                                        </div>
+                                                    )}
+                                                    {selected.body_map.back?.length > 0 && (
+                                                        <div>
+                                                            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Сзади</div>
+                                                            <svg viewBox={`0 0 ${BODY_VIEWBOX.w} ${BODY_VIEWBOX.h}`} width={120} height={240} style={{ border: "1px solid var(--border)", borderRadius: 8 }}>
+                                                                <image
+                                                                    href={BODY_IMAGES.back}
+                                                                    x="0"
+                                                                    y="0"
+                                                                    width={BODY_VIEWBOX.w}
+                                                                    height={BODY_VIEWBOX.h}
+                                                                    preserveAspectRatio="xMidYMid meet"
+                                                                />
+                                                                <g fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" opacity={0.85}>
+                                                                    {selected.body_map.back.map((d, i) => <path key={i} d={d} />)}
+                                                                </g>
+                                                            </svg>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         )}
